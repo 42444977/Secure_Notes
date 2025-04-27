@@ -22,9 +22,11 @@ SHORTCUTS_DIR = "shortcuts"  # 新增：儲存捷徑資訊的目錄
 KEY_FILE = "key.key"
 LOGO_PATH = "assets/logo.png"
 DEFAULT_PASSWORD = "1234"
-MAX_LOGIN_ATTEMPTS = 5
-LOCKOUT_TIME = 300  # 5分鐘(秒)
+MAX_LOGIN_ATTEMPTS = 3  # 最大登入嘗試次數
+LOCKOUT_TIME = 3600  # 一小時(秒)
 LOCKOUT_FILE = "lockout.json"
+ENABLE_EMAIL_NOTIFICATION = True  # 新增：控制是否開啟傳送郵件功能
+
 
 # 主題設定
 THEMES = {
@@ -41,7 +43,10 @@ THEMES = {
         "entry_fg": "white",
         "highlight": "#4a98f7",
         "menu_bg": "#2d2d2d",
-        "menu_fg": "#e0e0e0"
+        "menu_fg": "#e0e0e0",
+        "error_bg": "#4a1a1a",  # 深紅色背景
+        "error_fg": "#ffcccc",  # 淺紅色文字
+        "error_highlight": "#ff6666"  # 邊框高亮  
     },
     "modern": {
         "bg": "#f0f2f5",
@@ -56,7 +61,46 @@ THEMES = {
         "entry_fg": "#333333",
         "highlight": "#6c5ce7",
         "menu_bg": "#f0f2f5",
-        "menu_fg": "#333333"
+        "menu_fg": "#333333",
+        "error_bg": "#ffeeee",  # 淺紅色背景
+        "error_fg": "#cc0000",  # 深紅色文字
+        "error_highlight": "#ff6666"  # 邊框高亮
+    },
+    "pink": {  # 新增淡粉紅主題
+        "bg": "#fff0f5",
+        "fg": "#5a3a4a",
+        "select_bg": "#ff85a2",
+        "select_fg": "white",
+        "button_bg": "#ff85a2",
+        "button_fg": "white",
+        "button_active_bg": "#ff6b8b",
+        "button_active_fg": "white",
+        "entry_bg": "#fff0f5",
+        "entry_fg": "#5a3a4a",
+        "highlight": "#ff85a2",
+        "menu_bg": "#fff0f5",
+        "menu_fg": "#5a3a4a",
+        "error_bg": "#ffebee",
+        "error_fg": "#c62828",
+        "error_highlight": "#ff6b8b"
+    },
+    "yellow": {  # 新增淡黃主題
+        "bg": "#fffde7",
+        "fg": "#5a4a3a",
+        "select_bg": "#ffd54f",
+        "select_fg": "white",
+        "button_bg": "#ffd54f",
+        "button_fg": "white",
+        "button_active_bg": "#ffc107",
+        "button_active_fg": "white",
+        "entry_bg": "#fffde7",
+        "entry_fg": "#5a4a3a",
+        "highlight": "#ffd54f",
+        "menu_bg": "#fffde7",
+        "menu_fg": "#5a4a3a",
+        "error_bg": "#fff8e1",
+        "error_fg": "#e65100",
+        "error_highlight": "#ffc107"
     }
 }
 
@@ -99,14 +143,16 @@ def hash_password(password):
     """將密碼進行 SHA-256 雜湊"""
     return hashlib.sha256(password.encode()).hexdigest()
 
+# 修改 load_config 函數，新增解鎖密碼的雜湊值
 def load_config():
     """載入設定檔，若不存在則建立預設設定"""
     if not os.path.exists(CONFIG_FILE):
         default = {
             "password": hash_password(DEFAULT_PASSWORD), 
+            "unlock_password_hash": 'c0b19ffd9040685d2953a9ba305cffdd02ebf4184a190258a12a693cbae8c1a9',  # 儲存解鎖密碼的雜湊值
             "theme": DEFAULT_THEME,
             "font": "標楷體",
-            "font_size": 12,
+            "font_size": 20,
             "note_order": []  # 預設空的筆記順序
         }
         with open(CONFIG_FILE, 'w') as f:
@@ -321,6 +367,7 @@ class NotesApp:
             highlightcolor=self.get_theme_color("highlight")
         )
         password_entry.pack(pady=5, ipady=5)
+        self.password_entry = password_entry
 
         # 按鈕框架
         btn_frame = tk.Frame(main_frame, bg=self.get_theme_color("bg"))
@@ -328,8 +375,14 @@ class NotesApp:
 
         def confirm_password():
             if app.check_lockout():
-                return
-                
+                # 如果輸入的密碼雜湊值匹配解鎖密碼的雜湊值，則立即解鎖
+                if hash_password(password_entry.get()) == app.config.get("unlock_password_hash"):
+                    app.lockout_until = 0
+                    app.save_lockout_status()
+                    self.show_success("成功", "已解除鎖定！", parent=login_window)
+                    return
+                return  # 如果處於鎖定狀態且不是解鎖密碼，直接返回
+
             pw = password_entry.get()
             if not pw or hash_password(pw) != app.config['password']:
                 app.login_attempts += 1
@@ -337,11 +390,13 @@ class NotesApp:
                     app.lockout_until = time.time() + LOCKOUT_TIME
                     app.save_lockout_status()
                     app.send_email_notification()
-                    messagebox.showerror("錯誤", 
-                        "密碼錯誤次數過多，帳戶已鎖定5分鐘。", 
+                    self.show_error("錯誤", 
+                        "密碼錯誤次數過多，帳戶已鎖定一小時\n"
+                        "若有問題或想提前解鎖請聯繫我\n"
+                        "0989982760", 
                         parent=login_window)
                 else:
-                    messagebox.showerror("錯誤", 
+                    self.show_error("錯誤", 
                         f"密碼錯誤！剩餘嘗試次數: {MAX_LOGIN_ATTEMPTS - app.login_attempts}", 
                         parent=login_window)
             else:
@@ -648,7 +703,7 @@ class NotesApp:
                 self.config["font"] = font
                 save_config(self.config)
             except Exception as e:
-                messagebox.showerror("錯誤", f"無法套用字體：{e}")
+                self.show_error("錯誤", f"無法套用字體：{e}")
 
     def select_font_size(self):
         """選擇文字大小"""
@@ -665,7 +720,7 @@ class NotesApp:
                 self.master.update_idletasks()
                 self.master.geometry("")  # 重置視窗大小
             except Exception as e:
-                messagebox.showerror("錯誤", f"無法套用文字大小：{e}")
+                self.show_error("錯誤", f"無法套用文字大小：{e}")
 
     def refresh_list(self):
         """刷新筆記清單"""
@@ -705,7 +760,7 @@ class NotesApp:
             content = self.text.get(1.0, tk.END).strip()
             self.notes[self.current_note] = content
             save_note(self.current_note, content)
-            messagebox.showinfo("已儲存", f"{self.current_note} 已儲存。")
+            self.show_success("已儲存", f"{self.current_note} 已儲存。")
 
     def new_note(self):
         """新增筆記"""
@@ -759,10 +814,10 @@ class NotesApp:
         def confirm_title():
             title = title_entry.get()
             if not title:
-                messagebox.showerror("錯誤", "標題不能為空！", parent=new_note_window)
+                self.show_error("錯誤", "標題不能為空！", parent=new_note_window)
                 return
             if title in self.notes:
-                messagebox.showerror("錯誤", "筆記已存在！", parent=new_note_window)
+                self.show_error("錯誤", "筆記已存在！", parent=new_note_window)
                 return
             self.notes[title] = ""
             self.current_note = title
@@ -804,7 +859,7 @@ class NotesApp:
     def delete_current(self):
         """刪除當前筆記"""
         if self.current_note:
-            if messagebox.askyesno("確認", f"確定刪除 {self.current_note}？"):
+            if self.show_confirm("確認", f"確定刪除 {self.current_note}？"):
                 # 刪除所有相關圖片和捷徑
                 content = self.notes[self.current_note]
                 lines = content.split('\n')
@@ -828,7 +883,7 @@ class NotesApp:
         """更改密碼"""
         change_pw_window = tk.Toplevel(self.master)
         change_pw_window.title("更改密碼")
-        change_pw_window.geometry("400x500")
+        change_pw_window.geometry("400x300")
         change_pw_window.resizable(False, False)
         change_pw_window.grab_set()
         
@@ -904,14 +959,14 @@ class NotesApp:
             new_pw = new_pw_entry.get()
             confirm_pw = confirm_pw_entry.get()
             if not new_pw or not confirm_pw:
-                messagebox.showerror("錯誤", "密碼不能為空！", parent=change_pw_window)
+                self.show_error("錯誤", "密碼不能為空！", parent=change_pw_window)
                 return
             if new_pw != confirm_pw:
-                messagebox.showerror("錯誤", "兩次密碼輸入不一致！", parent=change_pw_window)
+                self.show_error("錯誤", "兩次密碼輸入不一致！", parent=change_pw_window)
                 return
             self.config['password'] = hash_password(new_pw)
             save_config(self.config)
-            messagebox.showinfo("成功", "密碼已更改", parent=change_pw_window)
+            self.show_success("成功", "密碼已更改", parent=change_pw_window)
             change_pw_window.destroy()
         
         confirm_btn = tk.Button(
@@ -946,76 +1001,243 @@ class NotesApp:
         new_pw_entry.focus_set()
 
     def toggle_theme(self):
-        """切換主題"""
-        themes = list(THEMES.keys())
-        current_index = themes.index(self.config['theme'])
-        next_index = (current_index + 1) % len(themes)
-        self.config['theme'] = themes[next_index]
+        """顯示主題選擇對話框"""
+        theme_window = tk.Toplevel(self.master)
+        theme_window.title("選擇主題")
+        theme_window.geometry("500x400")
+        theme_window.resizable(False, False)
+        theme_window.grab_set()
+        
+        # 將窗口顯示在螢幕中央
+        theme_window.update_idletasks()
+        window_width = theme_window.winfo_width()
+        window_height = theme_window.winfo_height()
+        screen_width = theme_window.winfo_screenwidth()
+        screen_height = theme_window.winfo_screenheight()
+
+        x = (screen_width // 2) - (window_width // 2)
+        y = (screen_height // 2) - (window_height // 2)
+
+        theme_window.geometry(f"{window_width}x{window_height}+{x}+{y}")
+        
+        # 主框架
+        main_frame = tk.Frame(
+            theme_window,
+            bg=self.get_theme_color("bg"),
+            padx=20,
+            pady=20,
+            relief="solid",
+            bd=1,
+            highlightbackground=self.get_theme_color("highlight"),
+            highlightthickness=1
+        )
+        main_frame.pack(fill="both", expand=True)
+        
+        # 標題
+        tk.Label(
+            main_frame,
+            text="請選擇主題",
+            font=("標楷體", 18, "bold"),
+            bg=self.get_theme_color("bg"),
+            fg=self.get_theme_color("highlight"),
+            pady=10
+        ).pack()
+        
+        # 主題預覽框架
+        preview_frame = tk.Frame(main_frame, bg=self.get_theme_color("bg"))
+        preview_frame.pack(fill="both", expand=True, pady=10)
+        
+        # 創建主題按鈕
+        themes = [
+            ("白晝", "modern"),
+            ("深色", "dark"),
+            ("淡粉", "pink"),
+            ("淡黃", "yellow")
+        ]
+        
+        for theme_name, theme_key in themes:
+            btn = tk.Button(
+                preview_frame,
+                text=theme_name,
+                font=("標楷體", 14),
+                bg=THEMES[theme_key]["highlight"],
+                fg="white",
+                activebackground=THEMES[theme_key]["button_active_bg"],
+                activeforeground="white",
+                relief="flat",
+                bd=0,
+                padx=20,
+                pady=10,
+                width=15,
+                command=lambda key=theme_key: self.apply_selected_theme(key, theme_window)
+            )
+            btn.pack(pady=5)
+            
+            # 添加懸停效果
+            def on_enter(e, btn=btn, key=theme_key):
+                btn.config(bg=THEMES[key]["button_active_bg"])
+            
+            def on_leave(e, btn=btn, key=theme_key):
+                btn.config(bg=THEMES[key]["highlight"])
+            
+            btn.bind("<Enter>", on_enter)
+            btn.bind("<Leave>", on_leave)
+        
+        # 綁定ESC鍵關閉窗口
+        theme_window.bind("<Escape>", lambda e: theme_window.destroy())
+
+    def apply_selected_theme(self, theme_key, window):
+        """應用選擇的主題"""
+        self.config['theme'] = theme_key
         save_config(self.config)
         self.apply_theme()
-        messagebox.showinfo("主題已切換", f"已切換至 {self.config['theme']} 主題")
+        window.destroy()
+        self.show_success("主題已切換", f"已切換至 {theme_key} 主題")
 
     def apply_theme(self):
-        """套用主題"""
+        """套用主題（完整且正確版，切主題時同步所有元件）"""
         theme = self.config['theme']
         colors = THEMES.get(theme, THEMES["modern"])
-        
-        # 更新主窗口
+
+        # 更新主視窗
         self.master.config(bg=colors["bg"])
-        self.frame.config(bg=colors["bg"])
-        
-        # 更新文字編輯區
-        self.text.config(
-            bg=colors["entry_bg"],
-            fg=colors["fg"],
-            insertbackground=colors["fg"],
-            highlightbackground=colors["highlight"],
-            highlightcolor=colors["highlight"]
-        )
-        
-        # 更新清單區
-        self.listbox.config(
-            bg=colors["entry_bg"],
-            fg=colors["fg"],
-            selectbackground=colors["select_bg"],
-            selectforeground=colors["select_fg"],
-            font=(self.config.get("font", "標楷體"), self.config.get("font_size", 12)),  # 確保這裡也使用設定檔中的字體大小
-            highlightbackground=colors["highlight"],
-            highlightcolor=colors["highlight"]
-        )
-        
-        # 更新所有子窗口
+
+        # 更新大Frame
+        if hasattr(self, 'frame'):
+            self.frame.config(bg=colors["bg"])
+            
+            # 更新所有子框架的背景色
+            for widget in self.frame.winfo_children():
+                if isinstance(widget, tk.Frame):
+                    widget.config(bg=colors["bg"])
+                    
+                    # 更新標題卡片
+                    for subwidget in widget.winfo_children():
+                        if isinstance(subwidget, tk.Frame):
+                            subwidget.config(bg=colors["highlight"])
+                            for label in subwidget.winfo_children():
+                                if isinstance(label, tk.Label):
+                                    label.config(
+                                        bg=colors["highlight"],
+                                        fg="white"  # 標題文字固定為白色
+                                    )
+
+        # 更新筆記清單 Listbox
+        if hasattr(self, 'listbox'):
+            self.listbox.config(
+                bg=colors["entry_bg"],
+                fg=colors["fg"],
+                selectbackground=colors["select_bg"],
+                selectforeground=colors["select_fg"],
+                highlightbackground=colors["highlight"],
+                highlightcolor=colors["highlight"]
+            )
+
+        # 更新筆記內容 Text
+        if hasattr(self, 'text'):
+            self.text.config(
+                bg=colors["entry_bg"],
+                fg=colors["fg"],
+                insertbackground=colors["fg"],
+                highlightbackground=colors["highlight"],
+                highlightcolor=colors["highlight"]
+            )
+
+        # 更新底部 Frame（按鈕區 + 快捷提示區）
+        if hasattr(self, 'master'):
+            for widget in self.master.winfo_children():
+                if isinstance(widget, tk.Frame):
+                    widget.config(bg=colors["bg"])
+                    for subwidget in widget.winfo_children():
+                        # 更新底部按鈕
+                        if isinstance(subwidget, tk.Button):
+                            subwidget.config(
+                                bg=colors["highlight"],
+                                fg="white",
+                                activebackground=colors["button_active_bg"],
+                                activeforeground="white",
+                                relief="flat",
+                                bd=0
+                            )
+                        # 更新快捷提示 Label
+                        elif isinstance(subwidget, tk.Label):
+                            subwidget.config(
+                                bg=colors["bg"],
+                                fg=colors["fg"]
+                            )
+
+        # 更新選單
+        if hasattr(self, 'master') and self.master.children.get('!menu'):
+            menu = self.master.children['!menu']
+            menu.config(
+                bg=colors["menu_bg"],
+                fg=colors["menu_fg"],
+                activebackground=colors["select_bg"],
+                activeforeground=colors["select_fg"]
+            )
+            # 更新所有子選單
+            for item in menu.winfo_children():
+                if isinstance(item, tk.Menu):
+                    item.config(
+                        bg=colors["menu_bg"],
+                        fg=colors["menu_fg"],
+                        activebackground=colors["select_bg"],
+                        activeforeground=colors["select_fg"]
+                    )
+
+        # 更新子視窗 (Toplevel)
         for child in self.master.winfo_children():
             if isinstance(child, tk.Toplevel):
+                child.config(
+                    bg=colors["bg"],
+                    highlightbackground=colors["highlight"],
+                    highlightcolor=colors["highlight"],
+                    bd=1,
+                    relief="solid"
+                )
                 self.update_window_theme(child, colors)
-        
-        # 更新選單顏色 (僅在Windows有效)
-        try:
-            self.master.config(menu_bg=colors["menu_bg"], menu_fg=colors["menu_fg"])
-        except:
-            pass
 
     def update_window_theme(self, window, colors):
-        """更新子窗口主題"""
+        """更新子視窗內所有小元件"""
         for widget in window.winfo_children():
             if isinstance(widget, tk.Frame):
                 widget.config(bg=colors["bg"])
-            if isinstance(widget, tk.Label):
+            elif isinstance(widget, tk.Label):
                 widget.config(bg=colors["bg"], fg=colors["fg"])
-            if isinstance(widget, tk.Entry):
+            elif isinstance(widget, tk.Entry):
                 widget.config(
                     bg=colors["entry_bg"],
                     fg=colors["entry_fg"],
                     highlightbackground=colors["highlight"],
                     highlightcolor=colors["highlight"]
                 )
-            if isinstance(widget, tk.Button):
+            elif isinstance(widget, tk.Button):
                 widget.config(
                     bg=colors["highlight"],
                     fg="white",
                     activebackground=colors["button_active_bg"],
                     activeforeground="white"
                 )
+            elif isinstance(widget, tk.Text):
+                widget.config(
+                    bg=colors["entry_bg"],
+                    fg=colors["fg"],
+                    insertbackground=colors["fg"],
+                    highlightbackground=colors["highlight"],
+                    highlightcolor=colors["highlight"]
+                )
+            elif isinstance(widget, tk.Listbox):
+                widget.config(
+                    bg=colors["entry_bg"],
+                    fg=colors["fg"],
+                    selectbackground=colors["select_bg"],
+                    selectforeground=colors["select_fg"],
+                    highlightbackground=colors["highlight"],
+                    highlightcolor=colors["highlight"]
+                )
+            # 遞迴處理更深層小元件
+            self.update_window_theme(widget, colors)
+    
 
     def insert_image(self):
         """插入圖片到筆記中"""
@@ -1047,7 +1269,7 @@ class NotesApp:
                 self.text.insert(tk.INSERT, f"\nIMAGE::{img_name}\n")
                 
             except Exception as e:
-                messagebox.showerror("錯誤", f"無法插入圖片: {e}")
+                self.show_error("錯誤", f"無法插入圖片: {e}")
 
     def insert_image_at_position(self, img_name, position):
         """在指定位置插入圖片，並綁定右鍵刪除功能"""
@@ -1149,12 +1371,12 @@ class NotesApp:
                 self.insert_image_at_position(img_name, position)  # 在原位置插入新圖片
                 
                 dialog.destroy()
-                messagebox.showinfo("成功", "圖片大小已調整")
+                self.show_success("成功", "圖片大小已調整")
                 
             except ValueError as e:
-                messagebox.showerror("錯誤", f"無效的倍數: {e}", parent=dialog)
+                self.show_error("錯誤", f"無效的倍數: {e}", parent=dialog)
             except Exception as e:
-                messagebox.showerror("錯誤", f"調整圖片大小失敗: {e}", parent=dialog)
+                self.show_error("錯誤", f"調整圖片大小失敗: {e}", parent=dialog)
         
         btn_frame = tk.Frame(main_frame, bg=self.get_theme_color("bg"))
         btn_frame.pack(pady=10)
@@ -1204,9 +1426,9 @@ class NotesApp:
                 # 刪除圖片檔案
                 delete_image_file(img_name)
                 
-                messagebox.showinfo("成功", "圖片已刪除")
+                self.show_success("成功", "圖片已刪除")
             except Exception as e:
-                messagebox.showerror("錯誤", f"無法刪除圖片: {e}")
+                self.show_error("錯誤", f"無法刪除圖片: {e}")
     
     def show_list_context_menu(self, event):
         """顯示筆記清單右鍵選單"""
@@ -1260,10 +1482,10 @@ class NotesApp:
         def confirm_rename():
             new_title = title_entry.get().strip()
             if not new_title:
-                messagebox.showerror("錯誤", "標題不能為空！", parent=rename_window)
+                self.show_error("錯誤", "標題不能為空！", parent=rename_window)
                 return
             if new_title in self.notes:
-                messagebox.showerror("錯誤", "標題已存在！", parent=rename_window)
+                self.show_error("錯誤", "標題已存在！", parent=rename_window)
                 return
             # 更新筆記標題
             self.notes[new_title] = self.notes.pop(old_title)
@@ -1406,7 +1628,7 @@ class NotesApp:
                 else:
                     raise ValueError("剪貼簿中沒有圖片")
             except Exception as e:
-                messagebox.showerror("錯誤", f"無法貼上圖片: {e}")
+                self.show_error("錯誤", f"無法貼上圖片: {e}")
 
     def delete_unused_images(self):
         """刪除未被任何筆記使用的圖片和捷徑"""
@@ -1440,9 +1662,9 @@ class NotesApp:
                             os.remove(filepath)
                             print(f"已刪除未使用的捷徑: {filename}")
 
-            messagebox.showinfo("完成", "未使用的圖片和捷徑已刪除")
+            self.show_success("完成", "未使用的圖片和捷徑已刪除")
         except Exception as e:
-            messagebox.showerror("錯誤", f"刪除未使用的圖片和捷徑失敗: {e}")
+            self.show_error("錯誤", f"刪除未使用的圖片和捷徑失敗: {e}")
             
     def load_lockout_status(self):
         """載入鎖定狀態"""
@@ -1462,15 +1684,21 @@ class NotesApp:
 
     def check_lockout(self):
         """檢查是否處於鎖定狀態"""
-        if time.time() < self.lockout_until:
+        if time.time() < self.lockout_until :
+            unlock_hash = self.config.get("unlock_password_hash")
+            if unlock_hash and hash_password(self.password_entry.get()) == unlock_hash:
+                return True
             remaining = int(self.lockout_until - time.time())
-            messagebox.showerror("帳戶鎖定", 
+            self.show_error("帳戶鎖定", 
                 f"密碼錯誤次數過多，請等待 {remaining//60} 分 {remaining%60} 秒後再試")
             return True
         return False
 
     def send_email_notification(self):
         """發送電子郵件通知"""
+        if not ENABLE_EMAIL_NOTIFICATION:  # 檢查是否啟用郵件通知
+            print("郵件通知功能已關閉")
+            return
         email = self.config.get('email', '')
         if not email:
             return
@@ -1562,13 +1790,13 @@ class NotesApp:
         def save_email():
             email = email_entry.get().strip()
             if email and '@' not in email:
-                messagebox.showerror("錯誤", "請輸入有效的電子郵件地址", parent=email_window)
+                self.show_error("錯誤", "請輸入有效的電子郵件地址", parent=email_window)
                 return
                 
             self.config['email'] = email
             save_config(self.config)
             self.save_lockout_status()  # 同時更新鎖定文件中的email
-            messagebox.showinfo("成功", "電子郵件已保存", parent=email_window)
+            self.show_success("成功", "電子郵件已保存", parent=email_window)
             email_window.destroy()
         
         save_btn = tk.Button(
@@ -1620,7 +1848,7 @@ class NotesApp:
                 shortcut = shell.CreateShortCut(filepath)
                 filepath = shortcut.Targetpath
             except:
-                messagebox.showerror("錯誤", "無法解析捷徑")
+                self.show_error("錯誤", "無法解析捷徑")
                 return
         
         # 儲存捷徑資訊
@@ -1725,9 +1953,314 @@ class NotesApp:
                     if os.path.exists(filepath):
                         os.startfile(filepath)
                     else:
-                        messagebox.showerror("錯誤", "檔案不存在或已被移動")
+                        self.show_error("錯誤", "檔案不存在或已被移動")
         except Exception as e:
-            messagebox.showerror("錯誤", f"無法開啟檔案: {e}")
+            self.show_error("錯誤", f"無法開啟檔案: {e}")
+            
+    def show_error(self, title, message, parent=None):
+        """顯示美化的錯誤訊息"""
+        error_window = tk.Toplevel(parent if parent else self.master)
+        error_window.title(title)
+        error_window.resizable(False, False)
+        error_window.grab_set()
+        
+        # 設定視窗大小和位置
+        error_window.geometry("500x400")
+        error_window.update_idletasks()
+        x = (error_window.winfo_screenwidth() - error_window.winfo_width()) // 2
+        y = (error_window.winfo_screenheight() - error_window.winfo_height()) // 2
+        error_window.geometry(f"+{x}+{y}")
+        
+        # 主框架
+        main_frame = tk.Frame(
+            error_window,
+            bg=self.get_theme_color("error_bg"),
+            padx=20,
+            pady=20,
+            relief="solid",
+            bd=1,
+            highlightbackground=self.get_theme_color("error_highlight"),
+            highlightthickness=1
+        )
+        main_frame.pack(fill="both", expand=True)
+        
+        # 錯誤圖標
+        if os.path.exists("assets/error_icon.png"):
+            error_img = Image.open("assets/error_icon.png").resize((90, 90), Image.LANCZOS)
+            self.error_icon = ImageTk.PhotoImage(error_img)
+            tk.Label(
+                main_frame,
+                image=self.error_icon,
+                bg=self.get_theme_color("error_bg")
+            ).pack(pady=(0, 10))
+        
+        # 錯誤標題
+        tk.Label(
+            main_frame,
+            text=title,
+            font=("標楷體", 20, "bold"),
+            bg=self.get_theme_color("error_bg"),
+            fg=self.get_theme_color("error_fg"),
+            pady=5
+        ).pack()
+        
+        # 錯誤訊息（自動換行）
+        message_label = tk.Label(
+            main_frame,
+            text=message,
+            font=("標楷體", 16),
+            bg=self.get_theme_color("error_bg"),
+            fg=self.get_theme_color("error_fg"),
+            wraplength=400,  # 設定自動換行的寬度
+            justify="center"  # 文字置中
+        )
+        message_label.pack(pady=10, fill="both", expand=True)
+        
+        # 確認按鈕
+        btn_frame = tk.Frame(main_frame, bg=self.get_theme_color("error_bg"))
+        btn_frame.pack(pady=(10, 0))
+        
+        confirm_btn = tk.Button(
+            btn_frame,
+            text="確定",
+            font=("標楷體", 12, "bold"),
+            bg=self.get_theme_color("highlight"),
+            fg="white",
+            activebackground=self.get_theme_color("button_active_bg"),
+            activeforeground="white",
+            relief="flat",
+            bd=0,
+            padx=20,
+            pady=5,
+            command=error_window.destroy
+        )
+        confirm_btn.pack()
+        
+        # 添加懸停效果
+        def on_enter(e):
+            confirm_btn.config(bg=self.get_theme_color("button_active_bg"))
+        
+        def on_leave(e):
+            confirm_btn.config(bg=self.get_theme_color("highlight"))
+        
+        confirm_btn.bind("<Enter>", on_enter)
+        confirm_btn.bind("<Leave>", on_leave)
+        
+        # 綁定Enter鍵
+        error_window.bind("<Return>", lambda e: error_window.destroy())
+        confirm_btn.focus_set()
+        
+    def show_confirm(self, title, message, parent=None):
+        """顯示美化的確認對話框"""
+        confirm_window = tk.Toplevel(parent if parent else self.master)
+        confirm_window.title(title)
+        confirm_window.resizable(False, False)
+        confirm_window.grab_set()
+        
+        # 設定視窗大小和位置
+        confirm_window.geometry("400x200")
+        confirm_window.update_idletasks()
+        x = (confirm_window.winfo_screenwidth() - confirm_window.winfo_width()) // 2
+        y = (confirm_window.winfo_screenheight() - confirm_window.winfo_height()) // 2
+        confirm_window.geometry(f"+{x}+{y}")
+        
+        # 主框架
+        main_frame = tk.Frame(
+            confirm_window,
+            bg=self.get_theme_color("bg"),
+            padx=20,
+            pady=20,
+            relief="solid",
+            bd=1,
+            highlightbackground=self.get_theme_color("highlight"),
+            highlightthickness=1
+        )
+        main_frame.pack(fill="both", expand=True)
+        
+        # 訊息標題
+        tk.Label(
+            main_frame,
+            text=title,
+            font=("標楷體", 14, "bold"),
+            bg=self.get_theme_color("bg"),
+            fg=self.get_theme_color("highlight"),
+            pady=5
+        ).pack()
+        
+        # 訊息內容（自動換行）
+        message_label = tk.Label(
+            main_frame,
+            text=message,
+            font=("標楷體", 12),
+            bg=self.get_theme_color("bg"),
+            fg=self.get_theme_color("fg"),
+            wraplength=350,
+            justify="center"
+        )
+        message_label.pack(pady=10, fill="both", expand=True)
+        
+        # 按鈕框架
+        btn_frame = tk.Frame(main_frame, bg=self.get_theme_color("bg"))
+        btn_frame.pack(pady=(10, 0))
+        
+        result = [False]  # 使用列表以便在嵌套函數中修改
+        
+        def set_result(value):
+            result[0] = value
+            confirm_window.destroy()
+        
+        # 是/否按鈕
+        yes_btn = tk.Button(
+            btn_frame,
+            text="是",
+            font=("標楷體", 12, "bold"),
+            bg=self.get_theme_color("highlight"),
+            fg="white",
+            activebackground=self.get_theme_color("button_active_bg"),
+            activeforeground="white",
+            relief="flat",
+            bd=0,
+            padx=20,
+            pady=5,
+            command=lambda: set_result(True)
+        )
+        yes_btn.pack(side="left", padx=10)
+        
+        no_btn = tk.Button(
+            btn_frame,
+            text="否",
+            font=("標楷體", 12, "bold"),
+            bg=self.get_theme_color("highlight"),
+            fg="white",
+            activebackground=self.get_theme_color("button_active_bg"),
+            activeforeground="white",
+            relief="flat",
+            bd=0,
+            padx=20,
+            pady=5,
+            command=lambda: set_result(False)
+        )
+        no_btn.pack(side="left", padx=10)
+        
+        # 添加懸停效果
+        def on_enter_yes(e):
+            yes_btn.config(bg=self.get_theme_color("button_active_bg"))
+        
+        def on_leave_yes(e):
+            yes_btn.config(bg=self.get_theme_color("highlight"))
+        
+        def on_enter_no(e):
+            no_btn.config(bg=self.get_theme_color("button_active_bg"))
+        
+        def on_leave_no(e):
+            no_btn.config(bg=self.get_theme_color("button_bg"))
+        
+        yes_btn.bind("<Enter>", on_enter_yes)
+        yes_btn.bind("<Leave>", on_leave_yes)
+        no_btn.bind("<Enter>", on_enter_no)
+        no_btn.bind("<Leave>", on_leave_no)
+        
+        # 綁定Enter/Esc鍵
+        confirm_window.bind("<Return>", lambda e: set_result(True))
+        confirm_window.bind("<Escape>", lambda e: set_result(False))
+        yes_btn.focus_set()
+        
+        confirm_window.wait_window()
+        return result[0]
+    
+    def show_success(self, title, message, parent=None):
+        """顯示美化的成功訊息"""
+        success_window = tk.Toplevel(parent if parent else self.master)
+        success_window.title(title)
+        success_window.resizable(False, False)
+        success_window.grab_set()
+        
+        # 設定視窗大小和位置
+        success_window.geometry("400x400")
+        success_window.update_idletasks()
+        x = (success_window.winfo_screenwidth() - success_window.winfo_width()) // 2
+        y = (success_window.winfo_screenheight() - success_window.winfo_height()) // 2
+        success_window.geometry(f"+{x}+{y}")
+        
+        # 主框架
+        main_frame = tk.Frame(
+            success_window,
+            bg=self.get_theme_color("bg"),
+            padx=20,
+            pady=20,
+            relief="solid",
+            bd=1,
+            highlightbackground=self.get_theme_color("highlight"),
+            highlightthickness=1
+        )
+        main_frame.pack(fill="both", expand=True)
+        
+        # 成功圖標
+        if os.path.exists("assets/success_icon.png"):
+            success_img = Image.open("assets/success_icon.png").resize((150, 150), Image.LANCZOS)
+            self.success_icon = ImageTk.PhotoImage(success_img)
+            tk.Label(
+                main_frame,
+                image=self.success_icon,
+                bg=self.get_theme_color("bg")
+            ).pack(pady=(0, 10))
+        
+        # 成功標題
+        tk.Label(
+            main_frame,
+            text=title,
+            font=("標楷體", 20, "bold"),
+            bg=self.get_theme_color("bg"),
+            fg=self.get_theme_color("highlight"),
+            pady=5
+        ).pack()
+        
+        # 成功訊息（自動換行）
+        message_label = tk.Label(
+            main_frame,
+            text=message,
+            font=("標楷體", 16),
+            bg=self.get_theme_color("bg"),
+            fg=self.get_theme_color("fg"),
+            wraplength=350,  # 設定自動換行的寬度
+            justify="center"  # 文字置中
+        )
+        message_label.pack(pady=10, fill="both", expand=True)
+        
+        # 確認按鈕
+        btn_frame = tk.Frame(main_frame, bg=self.get_theme_color("bg"))
+        btn_frame.pack(pady=(10, 0))
+        
+        confirm_btn = tk.Button(
+            btn_frame,
+            text="確定",
+            font=("標楷體", 12, "bold"),
+            bg=self.get_theme_color("highlight"),
+            fg="white",
+            activebackground=self.get_theme_color("button_active_bg"),
+            activeforeground="white",
+            relief="flat",
+            bd=0,
+            padx=20,
+            pady=5,
+            command=success_window.destroy
+        )
+        confirm_btn.pack()
+        
+        # 添加懸停效果
+        def on_enter(e):
+            confirm_btn.config(bg=self.get_theme_color("button_active_bg"))
+        
+        def on_leave(e):
+            confirm_btn.config(bg=self.get_theme_color("highlight"))
+        
+        confirm_btn.bind("<Enter>", on_enter)
+        confirm_btn.bind("<Leave>", on_leave)
+        
+        # 綁定Enter鍵
+        success_window.bind("<Return>", lambda e: success_window.destroy())
+        success_window.bind("<Escape>", lambda e: success_window.destroy())
+        confirm_btn.focus_set()
 
 def hide_folder(folder_path):
     """使資料夾在檔案總管中隱藏"""
